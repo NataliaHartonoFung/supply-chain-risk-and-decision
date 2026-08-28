@@ -1,0 +1,257 @@
+benchmark_data_path: "Phase3/phase3.csv"
+
+# Models Configuration
+supervisor_model: "gpt-3.5-turbo"
+# worker_model: "gpt-4o-mini"
+# worker_model: "llama3.2:1b-instruct-fp16"
+# worker_model: "smollm2:1.7b-instruct-fp16"
+worker_model: "granite3.1-moe:3b-instruct-q8_0"
+# worker_model: "gemma3:4b-it-qat"
+# worker_model: "phi3.5:3.8b-mini-instruct-q8_0"
+# worker_model: "qwen3:4b-instruct-2507-q8_0"
+# worker_model: "granite4:tiny-h"
+# worker_model: "mistral:7b-instruct-q4_K_M"
+embedding_model: "nomic-embed-text:137m-v1.5-fp16"
+
+# Agent Definitions
+# Each agent has 'rules' for deterministic rule-violation detection and 'scoring' for
+# consistent score calculation. The application code will handle this logic.
+# The 'prompt' is now simplified to focus only on generating a summary from pre-detected rule violations.
+
+agent_1_fleet_and_transport:
+  features: ['vehicle_gps_latitude', 'vehicle_gps_longitude', 'fuel_consumption_rate', 'eta_variation_hours', 'route_risk_level']
+  rules:
+    - feature: 'fuel_consumption_rate'
+      condition: 'outside_range'
+      threshold: [5, 20]
+      reason: "Fuel consumption rate of {value} liters/hour is outside the normal operating range of 5-20 L/hr."
+    - feature: 'eta_variation_hours'
+      condition: 'outside_range'
+      threshold: [-2, 5]
+      reason: "ETA variation of {value} hours is outside the acceptable range of -2 to +5 hours."
+    - feature: 'route_risk_level'
+      condition: 'greater_than'
+      threshold: 7
+      reason: "Severe route risk level detected ({value} on a 0-10 scale)."
+    - feature: 'vehicle_gps_latitude'
+      condition: 'equals'
+      threshold: 0
+      reason: "Vehicle GPS latitude is 0, indicating a potential loss of GPS signal or reporting failure."
+    - feature: 'vehicle_gps_longitude'
+      condition: 'equals'
+      threshold: 0
+      reason: "Vehicle GPS longitude is 0, indicating a potential loss of GPS signal or reporting failure."
+  scoring:
+    - feature: 'fuel_consumption_rate'
+      type: 'deviation_normalize'
+      safe_range: [5, 20]
+      bounds: [0, 40]
+    - feature: 'eta_variation_hours'
+      type: 'deviation_normalize'
+      safe_range: [-2, 5]
+      bounds: [-12, 24]
+    - feature: 'route_risk_level'
+      type: 'normalize'
+      range: [0, 10]
+    - feature: 'vehicle_gps_latitude'
+      type: 'categorical'
+      mapping: {0: 1.0}
+    - feature: 'vehicle_gps_longitude'
+      type: 'categorical'
+      mapping: {0: 1.0}
+  prompt: >
+    You are a Fleet & Transport specialist. The following anomalies have been programmatically detected
+    in vehicle movement, routing, and fuel data: {reasons_list}.
+    Provide a single, concise summary sentence explaining the overall fleet situation based on these issues.
+    Respond ONLY with a JSON object with a single key: "summary".
+
+agent_2_warehouse_and_fulfillment:
+  features: ['warehouse_inventory_level', 'loading_unloading_time', 'handling_equipment_availability', 'order_fulfillment_status']
+  rules:
+    - feature: 'warehouse_inventory_level'
+      condition: 'less_than'
+      threshold: 100
+      reason: "Warehouse inventory is critically low at {value} units, risking stockout."
+    - feature: 'loading_unloading_time'
+      condition: 'greater_than'
+      threshold: 4
+      reason: "Loading/unloading time of {value} hours exceeds the acceptable maximum of 4 hours."
+    - feature: 'handling_equipment_availability'
+      condition: 'equals'
+      threshold: 0
+      reason: "No handling equipment is available, causing significant operational delays."
+    - feature: 'order_fulfillment_status'
+      condition: 'equals'
+      threshold: 0
+      reason: "Order fulfillment has failed, indicating a critical breakdown in warehouse operations."
+  scoring:
+    - feature: 'warehouse_inventory_level'
+      type: 'inverse_normalize'
+      range: [0, 1000]
+    - feature: 'loading_unloading_time'
+      type: 'normalize'
+      range: [0.5, 5]
+    - feature: 'handling_equipment_availability'
+      type: 'categorical'
+      mapping: {0: 1.0, 1: 0.0}  # 0 = unavailable (max risk), 1 = available (no risk)
+    - feature: 'order_fulfillment_status'
+      type: 'categorical'
+      mapping: {0: 1.0, 1: 0.0}  # 0 = not fulfilled (max risk), 1 = fulfilled (no risk)
+  prompt: >
+    You are a Warehouse & Fulfillment specialist. The following anomalies have been programmatically
+    detected in inventory levels, loading times, equipment availability, and order fulfillment: {reasons_list}.
+    Provide a single, concise summary sentence explaining the overall warehouse situation based on these issues.
+    Respond ONLY with a JSON object with a single key: "summary".
+
+agent_3_procurement_and_suppliers:
+  features: ['supplier_reliability_score', 'lead_time_days', 'historical_demand', 'shipping_costs']
+  rules:
+    - feature: 'supplier_reliability_score'
+      condition: 'less_than'
+      threshold: 0.6
+      reason: "Supplier reliability score of {value} is below the acceptable threshold of 0.6."
+    - feature: 'lead_time_days'
+      condition: 'greater_than'
+      threshold: 10
+      reason: "Supplier lead time of {value} days is excessive, exceeding the 10-day threshold."
+    - feature: 'historical_demand'
+      condition: 'greater_than'
+      threshold: 5000
+      reason: "Historical demand spike of {value} units may outpace current procurement capacity."
+    - feature: 'shipping_costs'
+      condition: 'greater_than'
+      threshold: 700
+      reason: "Shipping cost of ${value} exceeds the acceptable threshold of $700, indicating an elevated cost anomaly."
+  scoring:
+    - feature: 'supplier_reliability_score'
+      type: 'inverse_normalize'
+      range: [0, 1]
+    - feature: 'lead_time_days'
+      type: 'normalize'
+      range: [1, 15]
+    - feature: 'historical_demand'
+      type: 'normalize'
+      range: [100, 10000]
+    - feature: 'shipping_costs'
+      type: 'normalize'
+      range: [100, 1000]
+  prompt: >
+    You are a Procurement & Supplier specialist. The following anomalies have been programmatically
+    detected in supplier reliability, lead times, demand signals, and shipping costs: {reasons_list}.
+    Provide a single, concise summary sentence explaining the overall procurement situation based on these issues.
+    Respond ONLY with a JSON object with a single key: "summary".
+
+agent_4_external_environment:
+  features: ['traffic_congestion_level', 'weather_condition_severity', 'port_congestion_level', 'customs_clearance_time']
+  rules:
+    - feature: 'traffic_congestion_level'
+      condition: 'greater_than'
+      threshold: 7
+      reason: "Traffic congestion level of {value} (on a 0-10 scale) is severely impacting transit times."
+    - feature: 'weather_condition_severity'
+      condition: 'greater_than'
+      threshold: 0.7
+      reason: "Weather condition severity of {value} (on a 0-1 scale) poses a significant risk to safe and timely delivery."
+    - feature: 'port_congestion_level'
+      condition: 'greater_than'
+      threshold: 8
+      reason: "Port congestion level is extremely high ({value} on a 0-10 scale), causing critical delays."
+    - feature: 'customs_clearance_time'
+      condition: 'greater_than'
+      threshold: 4
+      reason: "Customs clearance time of {value} hours exceeds the acceptable 4-hour threshold."
+  scoring:
+    - feature: 'traffic_congestion_level'
+      type: 'normalize'
+      range: [0, 10]
+    - feature: 'weather_condition_severity'
+      type: 'normalize'
+      range: [0, 1]
+    - feature: 'port_congestion_level'
+      type: 'normalize'
+      range: [0, 10]
+    - feature: 'customs_clearance_time'
+      type: 'normalize'
+      range: [0.5, 5]
+  prompt: >
+    You are an External Environment & Logistics analyst. The following external risk factors have been
+    programmatically detected across traffic, weather, port, and customs data: {reasons_list}.
+    Provide a single, concise summary sentence explaining the overall external risk situation based on these issues.
+    Respond ONLY with a JSON object with a single key: "summary".
+
+agent_5_cargo_quality:
+  features: ['iot_temperature', 'cargo_condition_status']
+  rules:
+    - feature: 'iot_temperature'
+      condition: 'outside_range'
+      threshold: [-5, 25]
+      reason: "IoT temperature of {value}°C is outside the safe storage range of -5°C to 25°C."
+    - feature: 'cargo_condition_status'
+      condition: 'equals'
+      threshold: 0
+      reason: "Cargo condition status indicates a problem, suggesting damage or spoilage has occurred."
+  scoring:
+    - feature: 'iot_temperature'
+      type: 'deviation_normalize'
+      safe_range: [-5, 25]
+      bounds: [-10, 40]
+    - feature: 'cargo_condition_status'
+      type: 'categorical'
+      mapping: {0: 1.0, 1: 0.0}  # 0 = poor condition (max risk), 1 = good condition (no risk)
+  prompt: >
+    You are a Cargo Quality & IoT Monitoring specialist. The following cargo integrity risks have been
+    programmatically detected from sensor and condition data: {reasons_list}.
+    Provide a single, concise summary sentence explaining the risks to cargo quality and integrity.
+    Respond ONLY with a JSON object with a single key: "summary".
+
+agent_6_human_factors:
+  features: ['driver_behavior_score', 'fatigue_monitoring_score']
+  rules:
+    - feature: 'driver_behavior_score'
+      condition: 'less_than'
+      threshold: 0.5
+      reason: "Driver behavior score is critically low ({value}), indicating unsafe driving patterns."
+    - feature: 'fatigue_monitoring_score'
+      condition: 'greater_than'
+      threshold: 0.7
+      reason: "High driver fatigue detected (score: {value}), posing an immediate safety risk."
+  scoring:
+    - feature: 'driver_behavior_score'
+      type: 'inverse_normalize'
+      range: [0, 1]
+    - feature: 'fatigue_monitoring_score'
+      type: 'normalize'
+      range: [0, 1]
+  prompt: >
+    You are a Human Factors & Driver Safety analyst. The following human-related risks have been
+    programmatically detected from driver behavior and fatigue monitoring data: {reasons_list}.
+    Provide a single, concise summary sentence explaining the overall human factor risk to operations.
+    Respond ONLY with a JSON object with a single key: "summary".
+
+supervisor:
+  prompt: >
+    You are an expert supply chain risk supervisor. You have received analyses from your team of specialist agents.
+    The overall operational risk level has been assessed as **{risk_level}** with a calculated global score of **{global_score:.2f}**.
+    Agent Reports:
+    {report_summary}
+    Your task is to synthesize these findings and provide a final list of concise, actionable recommendations for a human operator.
+    Respond ONLY with a JSON object containing a single key "recommendations" which is a list of strings.
+    Prefix critical, immediate actions with 'IMMEDIATE:'. Do not be conversational.
+
+  # These thresholds are centrally located for easy tuning of the system's risk tolerance.
+  risk_thresholds:
+    HIGH: 0.7
+    MODERATE: 0.3
+    # Anything below 'MODERATE' is considered LOW.
+ 
+  # Weights for each agent's score to calculate the final global score.
+  # Fleet/Transport and Human Factors carry the highest immediate operational and safety risk.
+  # Cargo Quality is weighted highly due to potential irreversible spoilage/damage losses.
+  # Warehouse, Procurement, and External Environment carry meaningful but secondary risk.
+  agent_weights:
+    agent_1_fleet_and_transport: 0.25
+    agent_2_warehouse_and_fulfillment: 0.10
+    agent_3_procurement_and_suppliers: 0.10
+    agent_4_external_environment: 0.15
+    agent_5_cargo_quality: 0.15
+    agent_6_human_factors: 0.25
